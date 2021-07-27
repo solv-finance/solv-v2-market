@@ -83,8 +83,7 @@ contract SolvICMarket is ISolvICMarket, PriceManager {
 
     //icToken => saleId
     mapping(address => EnumerableSetUpgradeable.UintSet) internal _icTokenSales;
-    mapping(address => EnumerableSetUpgradeable.AddressSet)
-        internal _allowAddresses;
+    mapping(address => EnumerableSetUpgradeable.AddressSet) internal _allowAddresses;
 
     ISolver public solver;
     uint24 public nextSaleId;
@@ -94,8 +93,19 @@ contract SolvICMarket is ISolvICMarket, PriceManager {
     bool public initialized;
     uint16 internal constant PERCENTAGE_BASE = 10000;
 
+    // managers with authorities to set allow addresses of a voucher market
+    mapping(address => EnumerableSetUpgradeable.AddressSet) internal allowAddressManagers;
+
+    // records of user purchased units from an order
+    mapping(uint24 => mapping(address => uint128)) internal saleRecords;
+
     modifier onlyAdmin {
         require(msg.sender == admin, "only admin");
+        _;
+    }
+
+    modifier onlyAllowAddressManager(address icToken_) {
+        require(msg.sender == admin || allowAddressManagers[icToken_].contains(msg.sender), "only manager");
         _;
     }
 
@@ -222,7 +232,7 @@ contract SolvICMarket is ISolvICMarket, PriceManager {
 
         PriceManager.PriceType priceType = PriceManager
         .PriceType
-        .DECILINING_BY_TIME;
+        .DECLIINING_BY_TIME;
         saleId = _publish(
             vars.seller,
             vars.icToken,
@@ -276,7 +286,7 @@ contract SolvICMarket is ISolvICMarket, PriceManager {
 
         VNFTTransferHelper.doTransferIn(icToken_, seller_, tokenId_);
 
-        saleId = _gernateNextSaleId();
+        saleId = _generateNextSaleId();
         uint256 units = vnft.unitsInToken(tokenId_);
         require(units <= uint128(-1), "exceeds uint128 max");
         sales[saleId] = Sale({
@@ -379,7 +389,7 @@ contract SolvICMarket is ISolvICMarket, PriceManager {
 
         if (
             sale.currency == EthAddressLib.ethAddress() &&
-            sale.priceType == PriceType.DECILINING_BY_TIME &&
+            sale.priceType == PriceType.DECLIINING_BY_TIME &&
             amount_ != msg.value
         ) {
             amount_ = msg.value;
@@ -437,7 +447,9 @@ contract SolvICMarket is ISolvICMarket, PriceManager {
             require(units_ >= sale_.min, "min units not met");
         }
         if (sale_.max > 0) {
-            require(units_ <= sale_.max, "max units not met");
+            uint128 purchased = saleRecords[sale_.saleId][buyer_].add(units_);
+            require(purchased <= sale_.max, "exceeds purchase limit");
+            saleRecords[sale_.saleId][buyer_] = purchased;
         }
 
         if (sale_.useAllowList) {
@@ -492,7 +504,7 @@ contract SolvICMarket is ISolvICMarket, PriceManager {
             sale_.saleId,
             sale_.icToken,
             sale_.tokenId,
-            _gernateNextTradeId(),
+            _generateNextTradeId(),
             uint32(block.timestamp),
             sale_.currency,
             uint8(sale_.priceType),
@@ -504,6 +516,7 @@ contract SolvICMarket is ISolvICMarket, PriceManager {
         );
 
         if (sale_.units == 0) {
+            delete sales[sale_.saleId];
             emit Remove(
                 sale_.icToken,
                 sale_.seller,
@@ -524,6 +537,10 @@ contract SolvICMarket is ISolvICMarket, PriceManager {
             price_,
             fee_
         );
+    }
+
+    function purchasedUnits(uint24 saleId_, address buyer_) external view returns(uint128) {
+        return saleRecords[saleId_][buyer_];
     }
 
     function remove(uint24 saleId_) public virtual override {
@@ -604,11 +621,11 @@ contract SolvICMarket is ISolvICMarket, PriceManager {
         return _icTokenSales[icToken_].at(index_);
     }
 
-    function _gernateNextSaleId() internal returns (uint24) {
+    function _generateNextSaleId() internal returns (uint24) {
         return nextSaleId++;
     }
 
-    function _gernateNextTradeId() internal returns (uint24) {
+    function _generateNextTradeId() internal returns (uint24) {
         return nextTradeId++;
     }
 
@@ -659,22 +676,60 @@ contract SolvICMarket is ISolvICMarket, PriceManager {
         emit WithdrawFee(icToken_, reduceAmount_);
     }
 
-    function _addAllowAddress(address icToken_, address[] calldata addresses_)
-        external
-        onlyAdmin
-    {
+    function _addAllowAddress(
+        address icToken_, 
+        address[] calldata addresses_,
+        bool resetExisting_
+    ) external onlyAllowAddressManager(icToken_) {
+        require(markets[icToken_].isValid, "unsupported icToken");
+        EnumerableSetUpgradeable.AddressSet storage set = _allowAddresses[icToken_];
+
+        if (resetExisting_) {
+            while (set.length() != 0) {
+                set.remove(set.at(0));
+            }
+        }
+
         for (uint256 i = 0; i < addresses_.length; i++) {
-            _allowAddresses[icToken_].add(addresses_[i]);
+            set.add(addresses_[i]);
         }
     }
 
     function _removeAllowAddress(
         address icToken_,
         address[] calldata addresses_
-    ) external onlyAdmin {
+    ) external onlyAllowAddressManager(icToken_) {
+        require(markets[icToken_].isValid, "unsupported icToken");
+        EnumerableSetUpgradeable.AddressSet storage set = _allowAddresses[icToken_];
         for (uint256 i = 0; i < addresses_.length; i++) {
-            _allowAddresses[icToken_].remove(addresses_[i]);
+            set.remove(addresses_[i]);
         }
+    }
+
+    function isBuyerAllowed(address icToken_, address buyer_) external view returns (bool) {
+        return _allowAddresses[icToken_].contains(buyer_);
+    }
+
+    function setAllowAddressManager(
+        address icToken_, 
+        address[] calldata managers_, 
+        bool resetExisting_
+    ) external onlyAdmin {
+        require(markets[icToken_].isValid, "unsupported icToken");
+        EnumerableSetUpgradeable.AddressSet storage set = allowAddressManagers[icToken_];
+        if (resetExisting_) {
+            while (set.length() != 0) {
+                set.remove(set.at(0));
+            }
+        }
+
+        for (uint256 i = 0; i < managers_.length; i++) {
+            set.add(managers_[i]);
+        }
+    }
+
+    function allowAddressManager(address icToken_, uint256 index_) external view returns(address) {
+        return allowAddressManagers[icToken_].at(index_);
     }
 
     function _setSolver(ISolver newSolver_) public virtual onlyAdmin {
