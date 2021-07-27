@@ -3,7 +3,7 @@
 pragma solidity 0.7.6;
 
 contract PriceManager {
-    enum PriceType {FIXED, DECILINING_BY_TIME}
+    enum PriceType {FIXED, DECLIINING_BY_TIME}
 
     struct DecliningPrice {
         uint128 highest; //起始价格
@@ -26,7 +26,7 @@ contract PriceManager {
             return fixedPrices[saleId_];
         }
 
-        if (priceType_ == PriceType.DECILINING_BY_TIME) {
+        if (priceType_ == PriceType.DECLIINING_BY_TIME) {
             DecliningPrice storage price_ = decliningPrices[saleId_];
             if (block.timestamp >= price_.startTime + price_.duration) {
                 return price_.lowest;
