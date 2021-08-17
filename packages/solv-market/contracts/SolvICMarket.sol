@@ -7,8 +7,7 @@ import "@solv/v2-helper/helpers/VNFTTransferHelper.sol";
 import "@solv/v2-helper/helpers/ERC20TransferHelper.sol";
 import "./interface/external/IVNFT.sol";
 import "./interface/external/ISolver.sol";
-import "./interface/external/IVestingPool.sol";
-import "./interface/external/IICToken.sol";
+import "./interface/external/IUnderlyingContainer.sol";
 import "./interface/ISolvICMarket.sol";
 import "./PriceManager.sol";
 import "./SafeMathUpgradeable128.sol";
@@ -98,6 +97,8 @@ contract SolvICMarket is ISolvICMarket, PriceManager {
 
     // records of user purchased units from an order
     mapping(uint24 => mapping(address => uint128)) internal saleRecords;
+
+    uint16 public repoFeeRate;
 
     modifier onlyAdmin {
         require(msg.sender == admin, "only admin");
@@ -277,7 +278,7 @@ contract SolvICMarket is ISolvICMarket, PriceManager {
         bool useAllowList_
     ) internal returns (uint24 saleId) {
         require(markets[icToken_].isValid, "unsupported icToken");
-        require(currencies[currency_], "unsupported currency");
+        require(currencies[currency_] || currency_ == IUnderlyingContainer(icToken_).underlying(), "unsupported currency");
         if (max_ > 0) {
             require(min_ <= max_, "min > max");
         }
@@ -340,7 +341,7 @@ contract SolvICMarket is ISolvICMarket, PriceManager {
     {
         Sale storage sale = sales[saleId_];
         address buyer = msg.sender;
-        uint128 fee = _getFee(sale.icToken, amount_);
+        uint128 fee = _getFee(sale.icToken, sale.currency, amount_);
         uint128 price = PriceManager.price(sale.priceType, sale.saleId);
         uint256 units256;
         if (markets[sale.icToken].feePayType == FeePayType.BUYER_PAY) {
@@ -393,7 +394,7 @@ contract SolvICMarket is ISolvICMarket, PriceManager {
             amount_ != msg.value
         ) {
             amount_ = msg.value;
-            uint128 fee = _getFee(sale.icToken, amount_);
+            uint128 fee = _getFee(sale.icToken, sale.currency, amount_);
             uint256 units256;
             if (markets[sale.icToken].feePayType == FeePayType.BUYER_PAY) {
                 units256 = amount_
@@ -409,7 +410,7 @@ contract SolvICMarket is ISolvICMarket, PriceManager {
             units_ = uint128(units256);
         }
 
-        fee_ = _getFee(sale.icToken, amount_);
+        fee_ = _getFee(sale.icToken, sale.currency, amount_);
 
         uint256 err = solver.buyAllowed(
             sale.icToken,
@@ -515,17 +516,6 @@ contract SolvICMarket is ISolvICMarket, PriceManager {
             fee_
         );
 
-        if (sale_.units == 0) {
-            delete sales[sale_.saleId];
-            emit Remove(
-                sale_.icToken,
-                sale_.seller,
-                sale_.saleId,
-                sale_.total,
-                sale_.total - sale_.units
-            );
-        }
-
         solver.buyVerify(
             sale_.icToken,
             sale_.tokenId,
@@ -537,6 +527,17 @@ contract SolvICMarket is ISolvICMarket, PriceManager {
             price_,
             fee_
         );
+
+        if (sale_.units == 0) {
+            emit Remove(
+                sale_.icToken,
+                sale_.seller,
+                sale_.saleId,
+                sale_.total,
+                sale_.total - sale_.units
+            );
+            delete sales[sale_.saleId];
+        }
     }
 
     function purchasedUnits(uint24 saleId_, address buyer_) external view returns(uint128) {
@@ -572,11 +573,17 @@ contract SolvICMarket is ISolvICMarket, PriceManager {
         );
     }
 
-    function _getFee(address icToken_, uint256 amount)
+    function _getFee(address icToken_, address currency_, uint256 amount)
         internal
         view
         returns (uint128)
     {
+        if (currency_ == IUnderlyingContainer(icToken_).underlying()) {
+            uint256 fee = amount.mul(uint256(repoFeeRate)).div(PERCENTAGE_BASE);
+            require(fee <= uint128(-1), "Fee: exceeds uint128 max");
+            return uint128(fee);
+        }
+
         Market storage market = markets[icToken_];
         if (market.feeType == FeeType.FIXED) {
             return market.feeAmount;
@@ -662,6 +669,10 @@ contract SolvICMarket is ISolvICMarket, PriceManager {
     function _setCurrency(address currency_, bool enable_) public onlyAdmin {
         currencies[currency_] = enable_;
         emit SetCurrency(currency_, enable_);
+    }
+
+    function _setRepoFeeRate(uint16 newRepoFeeRate_) external onlyAdmin {
+        repoFeeRate = newRepoFeeRate_;
     }
 
     function _withdrawFee(address icToken_, uint256 reduceAmount_)

@@ -3,9 +3,7 @@
 pragma solidity 0.7.6;
 
 interface ISolver {
-    event NewAdmin(address oldAdmin, address newAdmin);
-    event NewPendingAdmin(address oldPendingAdmin, address newPendingAdmin);
-
+    
     function isSolver() external returns (bool);
 
     function depositAllowed(
