@@ -37,7 +37,10 @@ npm install
 
 ## Bug Bounty
 
-The Solv Protocol bug bounty program is focused on the smart contracts and is focused on preventing:
+The Solv Protocol bug bounty program is on the Immunefi platform and can be accessed at:
+[https://www.immunefi.com/bounty/solvprotocol](https://www.immunefi.com/bounty/solvprotocol)
+
+The bug bounty program is focused on the smart contracts and focused on preventing:
 
 - Loss of user funds staked (principal) by freezing or theft
 - Theft of unclaimed yield
@@ -61,4 +64,3 @@ Rewards are distributed according to the impact of the vulnerability based on th
 All Critical/High severity bug reports must come with a PoC and a suggestion for a fix in order to be considered for a reward.
 
 Payouts are handled by the Solv Protocol team directly and are denominated in USD. Payouts are done in USDT.
-
